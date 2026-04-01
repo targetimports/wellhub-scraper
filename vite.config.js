@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Plugin que adiciona rotas de API direto no Vite dev server
 function apiPlugin() {
   return {
     name: 'api-proxy',
@@ -17,7 +16,7 @@ function apiPlugin() {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       };
 
-      // GET /api/search
+      // GET /api/search - buscar parceiros por lat/lon
       server.middlewares.use('/api/search', async (req, res) => {
         try {
           const url = new URL(req.url, 'http://localhost');
@@ -41,36 +40,73 @@ function apiPlugin() {
         }
       });
 
-      // GET /api/location
-      server.middlewares.use('/api/location', async (req, res) => {
-        try {
-          const url = new URL(req.url, 'http://localhost');
-          const term = url.searchParams.get('term') || '';
-          const response = await fetch(
-            `${WELLHUB_BFF}/v2/search/location?maxResults=6&locale=pt-br&term=${encodeURIComponent(term)}`,
-            { headers: HEADERS }
-          );
-          const data = await response.text();
-          res.setHeader('Content-Type', 'application/json');
-          res.end(data);
-        } catch (e) {
-          res.statusCode = 500;
-          res.end(JSON.stringify({ error: e.message }));
-        }
-      });
-
-      // GET /api/partner/:id
-      server.middlewares.use('/api/partner', async (req, res) => {
+      // GET /api/details?id=UUID - entra na pagina do parceiro e pega telefone + nome
+      server.middlewares.use('/api/details', async (req, res) => {
         try {
           const url = new URL(req.url, 'http://localhost');
           const id = url.searchParams.get('id') || '';
-          const response = await fetch(
-            `${WELLHUB_BFF}/v2/search/partner/${id}?locale=pt-br`,
-            { headers: HEADERS }
-          );
-          const data = await response.text();
+          if (!id) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'id obrigatorio' }));
+            return;
+          }
+
+          // Buscar a pagina HTML do parceiro no Wellhub
+          const pageUrl = `https://wellhub.com/pt-br/search/partners/${id}/`;
+          const response = await fetch(pageUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'text/html,application/xhtml+xml',
+              'Accept-Language': 'pt-BR,pt;q=0.9',
+            },
+          });
+          const html = await response.text();
+
+          // Extrair telefone - padroes: tel:, (XX) XXXXX-XXXX, +55...
+          let telefone = '';
+          const telMatch = html.match(/href="tel:([^"]+)"/);
+          if (telMatch) {
+            telefone = telMatch[1].trim();
+          } else {
+            // Buscar numeros no formato brasileiro
+            const phonePatterns = [
+              /\(\d{2}\)\s*\d{4,5}[\s-]?\d{4}/,
+              /\+55\s*\d{2}\s*\d{4,5}[\s-]?\d{4}/,
+              /\d{2}\s*\d{4,5}[\s-]?\d{4}/,
+            ];
+            for (const pattern of phonePatterns) {
+              const m = html.match(pattern);
+              if (m) {
+                telefone = m[0].trim();
+                break;
+              }
+            }
+          }
+
+          // Extrair nome da academia (og:title ou primeiro h1)
+          let nome = '';
+          const ogTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
+          if (ogTitle) {
+            nome = ogTitle[1].trim();
+          } else {
+            const h1 = html.match(/<h1[^>]*>([^<]+)<\/h1>/);
+            if (h1) nome = h1[1].trim();
+          }
+
+          // Extrair endereco
+          let endereco = '';
+          const addrMatch = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/);
+          if (addrMatch) {
+            endereco = addrMatch[1].trim();
+          }
+
+          // Extrair avaliacao
+          let avaliacao = '';
+          const ratingMatch = html.match(/(\d[,\.]\d+)\s*\(\d+\s*Avalia/);
+          if (ratingMatch) avaliacao = ratingMatch[1];
+
           res.setHeader('Content-Type', 'application/json');
-          res.end(data);
+          res.end(JSON.stringify({ id, nome, telefone, endereco, avaliacao }));
         } catch (e) {
           res.statusCode = 500;
           res.end(JSON.stringify({ error: e.message }));
