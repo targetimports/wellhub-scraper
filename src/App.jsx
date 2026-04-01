@@ -1,21 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-const ESTADOS = [
-  'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG',
-  'PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'
-];
-
-const UF_NOMES = {
-  AC:'Acre', AL:'Alagoas', AP:'Amapá', AM:'Amazonas', BA:'Bahia', CE:'Ceará',
-  DF:'Distrito Federal', ES:'Espírito Santo', GO:'Goiás', MA:'Maranhão',
-  MT:'Mato Grosso', MS:'Mato Grosso do Sul', MG:'Minas Gerais', PA:'Pará',
-  PB:'Paraíba', PR:'Paraná', PE:'Pernambuco', PI:'Piauí', RJ:'Rio de Janeiro',
-  RN:'Rio Grande do Norte', RS:'Rio Grande do Sul', RO:'Rondônia', RR:'Roraima',
-  SC:'Santa Catarina', SP:'São Paulo', SE:'Sergipe', TO:'Tocantins'
-};
-
 export default function App() {
-  const [uf, setUf] = useState('SP');
   const [cidadeTexto, setCidadeTexto] = useState('');
   const [sugestoes, setSugestoes] = useState([]);
   const [cidadeSelecionada, setCidadeSelecionada] = useState(null);
@@ -29,32 +14,23 @@ export default function App() {
   const abortRef = useRef(null);
   const debounceRef = useRef(null);
 
-  // Buscar sugestoes de cidade ao digitar
   useEffect(() => {
     if (cidadeTexto.length < 2) { setSugestoes([]); return; }
-
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       setBuscandoCidade(true);
       try {
-        // Remove acentos para busca
         const slug = cidadeTexto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-');
         const res = await fetch(`/api/location?term=${encodeURIComponent(slug)}`);
         const data = await res.json();
         if (Array.isArray(data)) {
-          // Filtrar pelo estado selecionado
-          const filtradas = data.filter(loc => {
-            const label = (loc.label || '').toUpperCase();
-            return label.includes(uf) || label.includes(UF_NOMES[uf].toUpperCase());
-          });
-          // Se nao encontrou no estado, mostrar todas
-          setSugestoes(filtradas.length > 0 ? filtradas : data);
+          setSugestoes(data);
           setShowSugestoes(true);
         }
       } catch { }
       setBuscandoCidade(false);
-    }, 500);
-  }, [cidadeTexto, uf]);
+    }, 400);
+  }, [cidadeTexto]);
 
   const selecionarSugestao = (loc) => {
     setCidadeSelecionada(loc);
@@ -63,63 +39,42 @@ export default function App() {
   };
 
   const buscar = async () => {
-    if (!cidadeSelecionada) {
-      setErro('Digite e selecione uma cidade primeiro');
-      return;
-    }
-    setLoading(true);
-    setResultados([]);
-    setErro('');
-
+    if (!cidadeSelecionada) { setErro('Digite e selecione uma cidade primeiro'); return; }
+    setLoading(true); setResultados([]); setErro('');
     const controller = new AbortController();
     abortRef.current = controller;
     const lat = cidadeSelecionada.location?.lat;
     const lon = cidadeSelecionada.location?.lon;
 
     try {
-      // PASSO 1: buscar lista
       setProgresso('Buscando academias...');
-      let allPartners = [];
-      let offset = 0;
-
+      let allPartners = []; let offset = 0;
       while (offset < 500) {
         if (controller.signal.aborted) break;
-        const params = new URLSearchParams({
-          lat: String(lat), lon: String(lon), limit: '20', offset: String(offset),
-        });
+        const params = new URLSearchParams({ lat: String(lat), lon: String(lon), limit: '20', offset: String(offset) });
         if (termo) params.set('term', termo);
-
         const res = await fetch(`/api/search?${params}`, { signal: controller.signal });
         if (!res.ok) throw new Error(`Erro ${res.status}`);
         const data = await res.json();
         if (!Array.isArray(data) || data.length === 0) break;
-
         allPartners = [...allPartners, ...data];
         setProgresso(`${allPartners.length} academias encontradas...`);
         offset += 20;
         if (data.length < 20) break;
       }
-
       if (controller.signal.aborted) return;
       if (allPartners.length === 0) { setErro('Nenhuma academia encontrada nessa cidade'); setLoading(false); return; }
-      setProgresso(`${allPartners.length} academias! Buscando telefones (0/${allPartners.length})...`);
+      setProgresso(`${allPartners.length} academias! Buscando telefones...`);
 
-      // PASSO 2: entrar em cada pagina pra pegar telefone
       const finalResults = [];
       for (let i = 0; i < allPartners.length; i++) {
         if (controller.signal.aborted) break;
         const p = allPartners[i];
         setProgresso(`Buscando telefone ${i + 1}/${allPartners.length}: ${p.name || '...'}`);
-
         try {
           const detRes = await fetch(`/api/details?id=${p.id}`, { signal: controller.signal });
           const det = await detRes.json();
-          finalResults.push({
-            nome: det.nome || p.name || '',
-            telefone: det.telefone || '',
-            endereco: p.fullAddress || det.endereco || '',
-            id: p.id,
-          });
+          finalResults.push({ nome: det.nome || p.name || '', telefone: det.telefone || '', endereco: p.fullAddress || det.endereco || '', id: p.id });
         } catch {
           finalResults.push({ nome: p.name || '', telefone: '', endereco: p.fullAddress || '', id: p.id });
         }
@@ -128,9 +83,7 @@ export default function App() {
       setProgresso('');
     } catch (err) {
       if (err.name !== 'AbortError') setErro(err.message);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const parar = () => { abortRef.current?.abort(); setLoading(false); setProgresso(''); };
@@ -139,13 +92,12 @@ export default function App() {
     if (!resultados.length) return;
     const rows = [['Nome', 'Telefone', 'Endereco']];
     resultados.forEach(r => rows.push([r.nome, r.telefone, r.endereco.replace(/"/g, '""')]));
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-    dl('\ufeff' + csv, `academias_${cidadeTexto}_${uf}.csv`, 'text/csv;charset=utf-8;');
+    dl('\ufeff' + rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n'), `academias_${cidadeTexto}.csv`, 'text/csv;charset=utf-8;');
   };
 
   const exportarJSON = () => {
     if (!resultados.length) return;
-    dl(JSON.stringify(resultados, null, 2), `academias_${cidadeTexto}_${uf}.json`, 'application/json');
+    dl(JSON.stringify(resultados, null, 2), `academias_${cidadeTexto}.json`, 'application/json');
   };
 
   const dl = (content, name, type) => {
@@ -159,8 +111,6 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#0f172a', color: '#e2e8f0', fontFamily: 'system-ui, sans-serif' }}>
-
-      {/* HEADER */}
       <div style={{ background: 'linear-gradient(135deg, #e11d48, #9333ea)', padding: '28px 0' }}>
         <div style={{ maxWidth: 960, margin: '0 auto', padding: '0 20px' }}>
           <h1 style={{ fontSize: 26, fontWeight: 800, color: '#fff', margin: 0 }}>🏋️ Wellhub Scraper</h1>
@@ -168,47 +118,22 @@ export default function App() {
         </div>
       </div>
 
-      {/* BARRA DE PESQUISA */}
       <div style={{ maxWidth: 960, margin: '-16px auto 0', padding: '0 20px' }}>
         <div style={{ background: '#1e293b', borderRadius: 16, padding: 20, border: '1px solid #334155', boxShadow: '0 20px 40px rgba(0,0,0,0.4)' }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
 
-            {/* ESTADO - dropdown */}
-            <div style={{ flex: '0 0 100px' }}>
-              <label style={labelStyle}>🏛️ Estado</label>
-              <select
-                value={uf}
-                onChange={e => { setUf(e.target.value); setCidadeTexto(''); setCidadeSelecionada(null); }}
-                style={{ ...inputStyle, cursor: 'pointer', appearance: 'auto', padding: '10px 8px' }}
-              >
-                {ESTADOS.map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* CIDADE - campo livre com autocomplete */}
-            <div style={{ flex: '1 1 220px', position: 'relative' }}>
-              <label style={labelStyle}>📍 Cidade (digite para buscar)</label>
-              <input
-                type="text"
-                value={cidadeTexto}
+            {/* CIDADE */}
+            <div style={{ flex: '1 1 280px', position: 'relative' }}>
+              <label style={labelStyle}>📍 Cidade</label>
+              <input type="text" value={cidadeTexto}
                 onChange={e => { setCidadeTexto(e.target.value); setCidadeSelecionada(null); }}
                 onFocus={() => sugestoes.length > 0 && setShowSugestoes(true)}
-                placeholder={`Ex: Feira de Santana, Vitória da Conquista...`}
-                style={{
-                  ...inputStyle, boxSizing: 'border-box', width: '100%',
-                  borderColor: cidadeSelecionada ? '#34d399' : '#475569',
-                }}
+                placeholder="Digite a cidade... Ex: Feira de Santana"
+                style={{ ...inputStyle, boxSizing: 'border-box', width: '100%', borderColor: cidadeSelecionada ? '#34d399' : '#475569' }}
               />
-              {buscandoCidade && (
-                <span style={{ position: 'absolute', right: 12, top: 32, color: '#fbbf24', fontSize: 12 }}>buscando...</span>
-              )}
-              {cidadeSelecionada && (
-                <span style={{ position: 'absolute', right: 12, top: 32, color: '#34d399', fontSize: 14 }}>✓</span>
-              )}
+              {buscandoCidade && <span style={{ position: 'absolute', right: 12, top: 32, color: '#fbbf24', fontSize: 12 }}>buscando...</span>}
+              {cidadeSelecionada && <span style={{ position: 'absolute', right: 12, top: 32, color: '#34d399', fontSize: 14 }}>✓</span>}
 
-              {/* Dropdown de sugestoes */}
               {showSugestoes && sugestoes.length > 0 && (
                 <div style={{
                   position: 'absolute', zIndex: 99, top: '100%', left: 0, right: 0, marginTop: 4,
@@ -216,41 +141,32 @@ export default function App() {
                   maxHeight: 250, overflowY: 'auto', boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
                 }}>
                   {sugestoes.map((loc, i) => (
-                    <button
-                      key={i}
-                      onClick={() => selecionarSugestao(loc)}
-                      style={{
-                        width: '100%', padding: '10px 16px', border: 'none', textAlign: 'left',
-                        background: 'transparent', color: '#cbd5e1', cursor: 'pointer', fontSize: 14,
-                        borderBottom: '1px solid #262f3d',
-                      }}
+                    <button key={i} onClick={() => selecionarSugestao(loc)}
+                      style={{ width: '100%', padding: '10px 16px', border: 'none', textAlign: 'left', background: 'transparent', color: '#cbd5e1', cursor: 'pointer', fontSize: 14, borderBottom: '1px solid #262f3d' }}
                       onMouseEnter={e => e.target.style.background = '#334155'}
                       onMouseLeave={e => e.target.style.background = 'transparent'}
-                    >
-                      📍 {loc.label}
-                    </button>
+                    >📍 {loc.label}</button>
                   ))}
                 </div>
               )}
             </div>
 
             {/* TIPO */}
-            <div style={{ flex: '1 1 180px' }}>
+            <div style={{ flex: '1 1 200px' }}>
               <label style={labelStyle}>🔍 Tipo (opcional)</label>
               <input type="text" value={termo} onChange={e => setTermo(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !loading && buscar()}
-                placeholder="academia, crossfit, yoga..."
+                placeholder="academia, crossfit, yoga, pilates..."
                 style={{ ...inputStyle, boxSizing: 'border-box', width: '100%' }}
               />
             </div>
 
             {/* BOTAO */}
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-              {loading ? (
-                <button onClick={parar} style={{ ...btnStyle, background: '#dc2626' }}>⏹ Parar</button>
-              ) : (
-                <button onClick={buscar} style={btnStyle}>🔍 Buscar</button>
-              )}
+              {loading
+                ? <button onClick={parar} style={{ ...btnStyle, background: '#dc2626' }}>⏹ Parar</button>
+                : <button onClick={buscar} style={btnStyle}>🔍 Buscar</button>
+              }
             </div>
           </div>
 
@@ -259,9 +175,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* RESULTADOS */}
       <div style={{ maxWidth: 960, margin: '0 auto', padding: '20px 20px 60px' }}>
-
         {resultados.length > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
             <div>
@@ -294,9 +208,9 @@ export default function App() {
                     <td style={td}>{i + 1}</td>
                     <td style={{ ...td, color: '#fff', fontWeight: 600 }}>{r.nome || '-'}</td>
                     <td style={td}>
-                      {r.telefone ? (
-                        <a href={`tel:${r.telefone}`} style={{ color: '#34d399', textDecoration: 'none', fontWeight: 600 }}>📞 {r.telefone}</a>
-                      ) : <span style={{ color: '#475569' }}>—</span>}
+                      {r.telefone
+                        ? <a href={`tel:${r.telefone}`} style={{ color: '#34d399', textDecoration: 'none', fontWeight: 600 }}>📞 {r.telefone}</a>
+                        : <span style={{ color: '#475569' }}>—</span>}
                     </td>
                     <td style={{ ...td, color: '#94a3b8', fontSize: 13 }}>{r.endereco || '-'}</td>
                   </tr>
@@ -309,7 +223,7 @@ export default function App() {
         {!loading && resultados.length === 0 && !erro && (
           <div style={{ textAlign: 'center', padding: '80px 20px' }}>
             <div style={{ fontSize: 64 }}>🏋️</div>
-            <h3 style={{ color: '#475569', fontSize: 18, marginTop: 16 }}>Escolha o estado, digite a cidade e clique Buscar</h3>
+            <h3 style={{ color: '#475569', fontSize: 18, marginTop: 16 }}>Digite a cidade e clique Buscar</h3>
             <p style={{ color: '#334155', marginTop: 8 }}>Funciona com qualquer cidade do Brasil</p>
           </div>
         )}
@@ -319,20 +233,8 @@ export default function App() {
 }
 
 const labelStyle = { fontSize: 11, color: '#94a3b8', marginBottom: 4, display: 'block', fontWeight: 600 };
-const inputStyle = {
-  width: '100%', padding: '10px 14px', background: '#0f172a', border: '1px solid #475569',
-  borderRadius: 8, color: '#fff', textAlign: 'left', cursor: 'pointer', fontSize: 14, outline: 'none',
-};
-const btnStyle = {
-  padding: '10px 24px', background: '#e11d48', color: '#fff', border: 'none',
-  borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap',
-};
-const dlBtnStyle = {
-  padding: '6px 16px', color: '#fff', border: 'none',
-  borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600,
-};
-const th = {
-  padding: '10px 12px', textAlign: 'left', color: '#94a3b8', fontWeight: 600,
-  fontSize: 12, textTransform: 'uppercase', borderBottom: '2px solid #334155',
-};
+const inputStyle = { width: '100%', padding: '10px 14px', background: '#0f172a', border: '1px solid #475569', borderRadius: 8, color: '#fff', textAlign: 'left', fontSize: 14, outline: 'none' };
+const btnStyle = { padding: '10px 24px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap' };
+const dlBtnStyle = { padding: '6px 16px', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 };
+const th = { padding: '10px 12px', textAlign: 'left', color: '#94a3b8', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', borderBottom: '2px solid #334155' };
 const td = { padding: '10px 12px', verticalAlign: 'top', fontSize: 14 };
