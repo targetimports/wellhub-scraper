@@ -1,12 +1,19 @@
 import { useState, useRef } from 'react';
 import { resolverBusca, listarEstados, buscarParceiros, buscarDetalhes } from './api';
 
-const estados = listarEstados();
+const UF_NOMES = {
+  AC:'Acre',AL:'Alagoas',AP:'Amapá',AM:'Amazonas',BA:'Bahia',CE:'Ceará',
+  DF:'Distrito Federal',ES:'Espírito Santo',GO:'Goiás',MA:'Maranhão',
+  MT:'Mato Grosso',MS:'Mato Grosso do Sul',MG:'Minas Gerais',PA:'Pará',
+  PB:'Paraíba',PR:'Paraná',PE:'Pernambuco',PI:'Piauí',RJ:'Rio de Janeiro',
+  RN:'Rio Grande do Norte',RS:'Rio Grande do Sul',RO:'Rondônia',RR:'Roraima',
+  SC:'Santa Catarina',SP:'São Paulo',SE:'Sergipe',TO:'Tocantins'
+};
 
 export default function App() {
-  const [modo, setModo] = useState('cidade'); // 'cidade' ou 'estado'
+  const [modo, setModo] = useState('cidade');
   const [cidade, setCidade] = useState('');
-  const [uf, setUf] = useState('TODOS');
+  const [uf, setUf] = useState('BA');
   const [termo, setTermo] = useState('');
   const [resultados, setResultados] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -15,27 +22,15 @@ export default function App() {
   const abortRef = useRef(null);
 
   const buscar = async () => {
-    let cidadesParaBuscar;
-
+    let dados;
     if (modo === 'estado') {
-      if (uf === 'TODOS') {
-        // Juntar todas as cidades de todos os estados
-        cidadesParaBuscar = [];
-        for (const e of estados) {
-          const dados = resolverBusca(e.uf);
-          if (dados) cidadesParaBuscar.push(...dados.cidades);
-        }
-      } else {
-        const dados = resolverBusca(uf);
-        if (!dados) { setErro('Estado não encontrado'); return; }
-        cidadesParaBuscar = dados.cidades;
-      }
+      dados = resolverBusca(uf);
     } else {
       if (!cidade.trim()) { setErro('Digite uma cidade'); return; }
-      const dados = resolverBusca(cidade);
-      if (!dados) { setErro('Cidade não encontrada. Tente: Salvador, Feira de Santana, São Paulo...'); return; }
-      cidadesParaBuscar = dados.cidades;
+      dados = resolverBusca(cidade);
+      if (!dados) { setErro('Cidade não encontrada'); return; }
     }
+    if (!dados || dados.pontos.length === 0) { setErro('Nenhum ponto de busca'); return; }
 
     setLoading(true); setResultados([]); setErro('');
     const controller = new AbortController();
@@ -43,25 +38,25 @@ export default function App() {
     const seenIds = new Set();
 
     try {
-      // Buscar em cada cidade
       let allPartners = [];
-      for (let ci = 0; ci < cidadesParaBuscar.length; ci++) {
+      const totalPontos = dados.pontos.length;
+
+      for (let pi = 0; pi < totalPontos; pi++) {
         if (controller.signal.aborted) break;
-        const c = cidadesParaBuscar[ci];
-        setProgresso(`Buscando em ${c.nome} (${ci + 1}/${cidadesParaBuscar.length})...`);
+        const ponto = dados.pontos[pi];
+        setProgresso(`Varrendo região ${pi + 1}/${totalPontos} | ${allPartners.length} academias encontradas`);
 
         let offset = 0;
-        while (offset < 500) {
+        while (offset < 200) {
           if (controller.signal.aborted) break;
-          const data = await buscarParceiros(c.lat, c.lon, 20, offset, termo, controller.signal);
+          const data = await buscarParceiros(ponto.lat, ponto.lon, 20, offset, termo, controller.signal);
           if (!Array.isArray(data) || data.length === 0) break;
           for (const p of data) {
             if (!seenIds.has(p.id)) {
               seenIds.add(p.id);
-              allPartners.push({ ...p, cidadeOrigem: c.nome });
+              allPartners.push(p);
             }
           }
-          setProgresso(`${c.nome}: ${allPartners.length} academias no total...`);
           offset += 20;
           if (data.length < 20) break;
         }
@@ -70,7 +65,6 @@ export default function App() {
       if (controller.signal.aborted) return;
       if (allPartners.length === 0) { setErro('Nenhuma academia encontrada'); setLoading(false); return; }
 
-      // Buscar telefones
       setProgresso(`${allPartners.length} academias! Buscando telefones...`);
       const finalResults = [];
       for (let i = 0; i < allPartners.length; i++) {
@@ -83,11 +77,10 @@ export default function App() {
             nome: det.nome || p.name || '',
             telefone: det.telefone || '',
             endereco: p.fullAddress || det.endereco || '',
-            cidade: p.cidadeOrigem || '',
             id: p.id,
           });
         } catch {
-          finalResults.push({ nome: p.name || '', telefone: '', endereco: p.fullAddress || '', cidade: p.cidadeOrigem || '', id: p.id });
+          finalResults.push({ nome: p.name || '', telefone: '', endereco: p.fullAddress || '', id: p.id });
         }
         setResultados([...finalResults]);
       }
@@ -99,17 +92,17 @@ export default function App() {
 
   const parar = () => { abortRef.current?.abort(); setLoading(false); setProgresso(''); };
 
+  const label = modo === 'estado' ? (UF_NOMES[uf] || uf) : cidade;
+
   const exportarCSV = () => {
     if (!resultados.length) return;
-    const rows = [['Nome', 'Telefone', 'Cidade', 'Endereco']];
-    resultados.forEach(r => rows.push([r.nome, r.telefone, r.cidade, r.endereco.replace(/"/g, '""')]));
-    const label = modo === 'estado' ? uf : cidade;
+    const rows = [['Nome', 'Telefone', 'Endereco']];
+    resultados.forEach(r => rows.push([r.nome, r.telefone, r.endereco.replace(/"/g, '""')]));
     dl('\ufeff' + rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n'), `academias_${label}.csv`, 'text/csv;charset=utf-8;');
   };
 
   const exportarJSON = () => {
     if (!resultados.length) return;
-    const label = modo === 'estado' ? uf : cidade;
     dl(JSON.stringify(resultados, null, 2), `academias_${label}.json`, 'application/json');
   };
 
@@ -119,37 +112,24 @@ export default function App() {
   };
 
   const comTel = resultados.filter(r => r.telefone);
-  const label = modo === 'estado' ? uf : cidade;
 
   return (
     <div style={{ minHeight: '100vh', background: '#0f172a', color: '#e2e8f0', fontFamily: 'system-ui, sans-serif' }}>
       <div style={{ background: 'linear-gradient(135deg, #e11d48, #9333ea)', padding: '28px 0' }}>
         <div style={{ maxWidth: 960, margin: '0 auto', padding: '0 20px' }}>
           <h1 style={{ fontSize: 26, fontWeight: 800, color: '#fff', margin: 0 }}>🏋️ Wellhub Scraper</h1>
-          <p style={{ color: '#fecdd3', margin: '4px 0 0', fontSize: 14 }}>Busca nome e telefone de academias por cidade ou estado inteiro</p>
+          <p style={{ color: '#fecdd3', margin: '4px 0 0', fontSize: 14 }}>Busca nome e telefone - varre o estado INTEIRO</p>
         </div>
       </div>
 
       <div style={{ maxWidth: 960, margin: '-16px auto 0', padding: '0 20px' }}>
         <div style={{ background: '#1e293b', borderRadius: 16, padding: 20, border: '1px solid #334155', boxShadow: '0 20px 40px rgba(0,0,0,0.4)' }}>
-
-          {/* Toggle cidade/estado */}
           <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
-            <button onClick={() => setModo('cidade')}
-              style={{ padding: '6px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                background: modo === 'cidade' ? '#e11d48' : '#334155', color: '#fff' }}>
-              📍 Por Cidade
-            </button>
-            <button onClick={() => setModo('estado')}
-              style={{ padding: '6px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                background: modo === 'estado' ? '#e11d48' : '#334155', color: '#fff' }}>
-              🗺️ Estado Inteiro
-            </button>
+            <button onClick={() => setModo('cidade')} style={{ padding: '6px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600, background: modo === 'cidade' ? '#e11d48' : '#334155', color: '#fff' }}>📍 Por Cidade</button>
+            <button onClick={() => setModo('estado')} style={{ padding: '6px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600, background: modo === 'estado' ? '#e11d48' : '#334155', color: '#fff' }}>🗺️ Estado Inteiro</button>
           </div>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-
-            {/* Cidade OU Estado */}
             {modo === 'cidade' ? (
               <div style={{ flex: '1 1 250px' }}>
                 <label style={labelStyle}>📍 Cidade</label>
@@ -160,42 +140,14 @@ export default function App() {
               </div>
             ) : (
               <div style={{ flex: '1 1 250px' }}>
-                <label style={labelStyle}>🗺️ Estado (busca todas as cidades)</label>
-                <select value={uf} onChange={e => setUf(e.target.value)}
-                  style={{ ...inputStyle, cursor: 'pointer', appearance: 'auto' }}>
-                  <option value="TODOS">TODO BRASIL</option>
-                  <option value="AC">Acre</option>
-                  <option value="AL">Alagoas</option>
-                  <option value="AP">Amapá</option>
-                  <option value="AM">Amazonas</option>
-                  <option value="BA">Bahia</option>
-                  <option value="CE">Ceará</option>
-                  <option value="DF">Distrito Federal</option>
-                  <option value="ES">Espírito Santo</option>
-                  <option value="GO">Goiás</option>
-                  <option value="MA">Maranhão</option>
-                  <option value="MT">Mato Grosso</option>
-                  <option value="MS">Mato Grosso do Sul</option>
-                  <option value="MG">Minas Gerais</option>
-                  <option value="PA">Pará</option>
-                  <option value="PB">Paraíba</option>
-                  <option value="PR">Paraná</option>
-                  <option value="PE">Pernambuco</option>
-                  <option value="PI">Piauí</option>
-                  <option value="RJ">Rio de Janeiro</option>
-                  <option value="RN">Rio Grande do Norte</option>
-                  <option value="RS">Rio Grande do Sul</option>
-                  <option value="RO">Rondônia</option>
-                  <option value="RR">Roraima</option>
-                  <option value="SC">Santa Catarina</option>
-                  <option value="SP">São Paulo</option>
-                  <option value="SE">Sergipe</option>
-                  <option value="TO">Tocantins</option>
+                <label style={labelStyle}>🗺️ Estado (varre TODAS as cidades)</label>
+                <select value={uf} onChange={e => setUf(e.target.value)} style={{ ...inputStyle, cursor: 'pointer', appearance: 'auto' }}>
+                  {Object.entries(UF_NOMES).sort((a,b) => a[1].localeCompare(b[1])).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
                 </select>
               </div>
             )}
-
-            {/* Tipo */}
             <div style={{ flex: '1 1 180px' }}>
               <label style={labelStyle}>🔍 Tipo (opcional)</label>
               <input type="text" value={termo} onChange={e => setTermo(e.target.value)}
@@ -203,8 +155,6 @@ export default function App() {
                 placeholder="academia, crossfit, yoga..."
                 style={{ ...inputStyle, boxSizing: 'border-box', width: '100%' }} />
             </div>
-
-            {/* Botão */}
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               {loading
                 ? <button onClick={parar} style={{ ...btnStyle, background: '#dc2626' }}>⏹ Parar</button>
@@ -237,9 +187,7 @@ export default function App() {
           <div style={{ borderRadius: 12, border: '1px solid #334155', overflow: 'hidden', overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: '#1e293b' }}>
-                <th style={th}>#</th><th style={th}>Nome</th><th style={th}>Telefone</th>
-                {modo === 'estado' && <th style={th}>Cidade</th>}
-                <th style={th}>Endereço</th>
+                <th style={th}>#</th><th style={th}>Nome</th><th style={th}>Telefone</th><th style={th}>Endereço</th>
               </tr></thead>
               <tbody>
                 {resultados.map((r, i) => (
@@ -249,7 +197,6 @@ export default function App() {
                     <td style={td}>{r.telefone
                       ? <a href={`tel:${r.telefone}`} style={{ color: '#34d399', textDecoration: 'none', fontWeight: 600 }}>📞 {r.telefone}</a>
                       : <span style={{ color: '#475569' }}>—</span>}</td>
-                    {modo === 'estado' && <td style={{ ...td, color: '#fb7185', fontSize: 13 }}>{r.cidade}</td>}
                     <td style={{ ...td, color: '#94a3b8', fontSize: 13 }}>{r.endereco || '-'}</td>
                   </tr>
                 ))}
@@ -261,8 +208,8 @@ export default function App() {
         {!loading && resultados.length === 0 && !erro && (
           <div style={{ textAlign: 'center', padding: '80px 20px' }}>
             <div style={{ fontSize: 64 }}>🏋️</div>
-            <h3 style={{ color: '#475569', fontSize: 18, marginTop: 16 }}>Escolha cidade ou estado inteiro e clique Buscar</h3>
-            <p style={{ color: '#334155', marginTop: 8 }}>Estado inteiro busca em todas as cidades do estado</p>
+            <h3 style={{ color: '#475569', fontSize: 18, marginTop: 16 }}>Escolha cidade ou estado e clique Buscar</h3>
+            <p style={{ color: '#334155', marginTop: 8 }}>Estado inteiro varre TODAS as cidades com grade de ~50km</p>
           </div>
         )}
       </div>
