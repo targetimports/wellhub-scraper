@@ -1,5 +1,61 @@
-// Bounding box de cada estado (lat/lon min/max)
-// O scraper cria uma grade de pontos e busca em cada um
+const TOKEN = 'Bearer 79b04a6d36f4efaac4e8fbfe54398e276a99ac0d9021550e50406be01c99c608';
+const BFF = 'https://mep-partner-bff.wellhub.com';
+const HDRS = {
+  'Authorization': TOKEN,
+  'Referer': 'https://wellhub.com/',
+  'Origin': 'https://wellhub.com',
+  'Accept': 'application/json',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+};
+
+// Tenta /api local, se falhar tenta direto, se CORS bloquear tenta proxies
+async function smartFetch(localUrl, directUrl, signal, isJson = true) {
+  // 1) Tentar rota local /api (funciona se Vite plugin estiver ativo)
+  try {
+    const res = await fetch(localUrl, { signal });
+    if (res.ok) {
+      const text = await res.text();
+      if (isJson && text.startsWith('<')) throw new Error('got html');
+      return isJson ? JSON.parse(text) : text;
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+  }
+
+  // 2) Tentar chamada direta (funciona de Node.js ou se CORS permitir)
+  try {
+    const res = await fetch(directUrl, { signal, headers: HDRS });
+    if (res.ok) {
+      const text = await res.text();
+      if (isJson && text.startsWith('<')) throw new Error('got html');
+      return isJson ? JSON.parse(text) : text;
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+  }
+
+  // 3) Tentar via proxy CORS
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(directUrl)}`,
+    `https://corsproxy.io/?${encodeURIComponent(directUrl)}`,
+  ];
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy, { signal });
+      if (res.ok) {
+        const text = await res.text();
+        if (isJson && text.startsWith('<')) continue;
+        return isJson ? JSON.parse(text) : text;
+      }
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+    }
+  }
+
+  throw new Error('API indisponivel - tente novamente');
+}
+
+// Bounding box de cada estado
 const ESTADOS_BBOX = {
   "AC": { latMin: -11.15, latMax: -7.11, lonMin: -73.99, lonMax: -66.62 },
   "AL": { latMin: -10.50, latMax: -8.81, lonMin: -37.94, lonMax: -35.15 },
@@ -30,7 +86,6 @@ const ESTADOS_BBOX = {
   "TO": { latMin: -13.47, latMax: -5.17, lonMin: -50.73, lonMax: -45.73 },
 };
 
-// Cidades para busca individual
 const CIDADES_DB = {
   "sao paulo": { lat: -23.5505, lon: -46.6333 },
   "rio de janeiro": { lat: -22.9068, lon: -43.1729 },
@@ -49,14 +104,6 @@ const CIDADES_DB = {
   "natal": { lat: -5.7945, lon: -35.211 },
   "belem": { lat: -1.4558, lon: -48.5024 },
   "santos": { lat: -23.9608, lon: -46.3336 },
-  "sorocaba": { lat: -23.5015, lon: -47.4526 },
-  "ribeirao preto": { lat: -21.1704, lon: -47.8103 },
-  "uberlandia": { lat: -18.9186, lon: -48.2772 },
-  "joinville": { lat: -26.3045, lon: -48.8487 },
-  "londrina": { lat: -23.3045, lon: -51.1696 },
-  "niteroi": { lat: -22.8833, lon: -43.1036 },
-  "juiz de fora": { lat: -21.7642, lon: -43.3503 },
-  "maringa": { lat: -23.4205, lon: -51.9333 },
   "feira de santana": { lat: -12.2545, lon: -38.9543 },
   "vitoria da conquista": { lat: -14.8619, lon: -40.8444 },
   "ilheus": { lat: -14.7936, lon: -39.0464 },
@@ -72,53 +119,55 @@ const CIDADES_DB = {
   "rio branco": { lat: -9.9753, lon: -67.81 },
   "macapa": { lat: 0.0349, lon: -51.0694 },
   "boa vista": { lat: 2.8195, lon: -60.6714 },
+  "londrina": { lat: -23.3045, lon: -51.1696 },
+  "maringa": { lat: -23.4205, lon: -51.9333 },
+  "joinville": { lat: -26.3045, lon: -48.8487 },
   "blumenau": { lat: -26.9194, lon: -49.0661 },
+  "ribeirao preto": { lat: -21.1704, lon: -47.8103 },
+  "uberlandia": { lat: -18.9186, lon: -48.2772 },
+  "sorocaba": { lat: -23.5015, lon: -47.4526 },
+  "niteroi": { lat: -22.8833, lon: -43.1036 },
+  "juiz de fora": { lat: -21.7642, lon: -43.3503 },
   "caxias do sul": { lat: -29.1681, lon: -51.1794 },
   "cascavel": { lat: -24.9573, lon: -53.4593 },
-  "foz do iguacu": { lat: -25.5163, lon: -54.5854 },
   "petropolis": { lat: -22.5046, lon: -43.1787 },
-  "volta redonda": { lat: -22.5023, lon: -44.1044 },
-  "campos dos goytacazes": { lat: -21.7523, lon: -41.3305 },
-  "cabo frio": { lat: -22.8789, lon: -42.0189 },
   "caruaru": { lat: -8.2823, lon: -35.9761 },
   "petrolina": { lat: -9.3891, lon: -40.5003 },
   "chapeco": { lat: -27.1006, lon: -52.6155 },
-  "santa maria": { lat: -29.6842, lon: -53.8069 },
-  "passo fundo": { lat: -28.2624, lon: -52.4068 },
   "bauru": { lat: -22.3246, lon: -49.0871 },
   "franca": { lat: -20.539, lon: -47.4008 },
+  "montes claros": { lat: -16.735, lon: -43.8615 },
+  "campina grande": { lat: -7.2307, lon: -35.8817 },
+  "sobral": { lat: -3.6861, lon: -40.3482 },
+  "mossoró": { lat: -5.1878, lon: -37.3441 },
   "presidente prudente": { lat: -22.1256, lon: -51.3889 },
   "sao jose do rio preto": { lat: -20.8113, lon: -49.3758 },
-  "montes claros": { lat: -16.735, lon: -43.8615 },
-  "governador valadares": { lat: -18.8509, lon: -41.9494 },
   "anapolis": { lat: -16.3281, lon: -48.9529 },
+  "dourados": { lat: -22.2233, lon: -54.8083 },
+  "sinop": { lat: -11.8642, lon: -55.5066 },
   "imperatriz": { lat: -5.519, lon: -47.4735 },
   "maraba": { lat: -5.3685, lon: -49.1178 },
   "santarem": { lat: -2.443, lon: -54.708 },
-  "rondonopolis": { lat: -16.4673, lon: -54.6372 },
-  "sinop": { lat: -11.8642, lon: -55.5066 },
-  "dourados": { lat: -22.2233, lon: -54.8083 },
-  "campina grande": { lat: -7.2307, lon: -35.8817 },
-  "mossoró": { lat: -5.1878, lon: -37.3441 },
-  "sobral": { lat: -3.6861, lon: -40.3482 },
-  "juazeiro do norte": { lat: -7.2131, lon: -39.3153 },
+  "volta redonda": { lat: -22.5023, lon: -44.1044 },
+  "campos dos goytacazes": { lat: -21.7523, lon: -41.3305 },
+  "cabo frio": { lat: -22.8789, lon: -42.0189 },
+  "santa maria": { lat: -29.6842, lon: -53.8069 },
+  "passo fundo": { lat: -28.2624, lon: -52.4068 },
+  "foz do iguacu": { lat: -25.5163, lon: -54.5854 },
 };
 
 function normalize(str) {
   return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z\s]/g, '').trim();
 }
 
-// Gera grade de pontos cobrindo o estado inteiro (a cada ~50km)
 function gerarGrade(uf) {
   const bbox = ESTADOS_BBOX[uf];
   if (!bbox) return [];
-
-  const STEP = 0.45; // ~50km entre pontos
+  const STEP = 0.45;
   const pontos = [];
-
   for (let lat = bbox.latMin; lat <= bbox.latMax; lat += STEP) {
     for (let lon = bbox.lonMin; lon <= bbox.lonMax; lon += STEP) {
-      pontos.push({ lat: Math.round(lat * 10000) / 10000, lon: Math.round(lon * 10000) / 10000, nome: `${uf} (${pontos.length + 1})` });
+      pontos.push({ lat: Math.round(lat * 10000) / 10000, lon: Math.round(lon * 10000) / 10000 });
     }
   }
   return pontos;
@@ -126,52 +175,60 @@ function gerarGrade(uf) {
 
 export function resolverBusca(texto) {
   const upper = texto.trim().toUpperCase();
-
-  // Estado inteiro
-  if (ESTADOS_BBOX[upper]) {
-    return { tipo: 'estado', uf: upper, pontos: gerarGrade(upper) };
-  }
-
-  // Todo Brasil
+  if (ESTADOS_BBOX[upper]) return { tipo: 'estado', pontos: gerarGrade(upper) };
   if (upper === 'TODOS') {
     const pontos = [];
-    for (const uf of Object.keys(ESTADOS_BBOX)) {
-      pontos.push(...gerarGrade(uf));
-    }
-    return { tipo: 'brasil', uf: 'BR', pontos };
+    for (const uf of Object.keys(ESTADOS_BBOX)) pontos.push(...gerarGrade(uf));
+    return { tipo: 'brasil', pontos };
   }
-
-  // Cidade
   const norm = normalize(texto);
   for (const [key, coords] of Object.entries(CIDADES_DB)) {
     if (key === norm || key.includes(norm) || norm.includes(key)) {
-      return { tipo: 'cidade', pontos: [{ ...coords, nome: texto }] };
+      return { tipo: 'cidade', pontos: [coords] };
     }
   }
-
   return null;
 }
 
-export function listarEstados() {
-  return Object.keys(ESTADOS_BBOX).sort();
-}
+export function listarEstados() { return Object.keys(ESTADOS_BBOX).sort(); }
 
 export async function buscarParceiros(lat, lon, limit, offset, term, signal) {
-  const params = new URLSearchParams({
-    lat: String(lat), lon: String(lon), limit: String(limit), offset: String(offset),
+  const p = new URLSearchParams({
+    lat: String(lat), lon: String(lon), locale: 'pt-br',
+    limit: String(limit), offset: String(offset),
   });
-  if (term) params.set('term', term);
-  const res = await fetch(`/api/search?${params}`, { signal });
-  if (!res.ok) throw new Error(`Erro ${res.status}`);
-  return res.json();
+  if (term) p.set('term', term);
+  return smartFetch(
+    `/api/search?${p}`,
+    `${BFF}/v2/search?${p}`,
+    signal, true
+  );
 }
 
 export async function buscarDetalhes(id, signal) {
   try {
-    const res = await fetch(`/api/details?id=${id}`, { signal });
-    if (!res.ok) return { id, nome: '', telefone: '', endereco: '' };
-    return res.json();
+    return await smartFetch(
+      `/api/details?id=${id}`,
+      `https://wellhub.com/pt-br/search/partners/${id}/`,
+      signal, true
+    );
   } catch {
-    return { id, nome: '', telefone: '', endereco: '' };
+    // Se smartFetch retornar HTML (pagina do parceiro), parsear aqui
+    try {
+      const html = await smartFetch(
+        `/api/details?id=${id}`,
+        `https://wellhub.com/pt-br/search/partners/${id}/`,
+        signal, false
+      );
+      let telefone = '';
+      const tel = html.match(/href="tel:([^"]+)"/);
+      if (tel) telefone = tel[1].trim();
+      let nome = '';
+      const og = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
+      if (og) nome = og[1].trim();
+      return { id, nome, telefone, endereco: '' };
+    } catch {
+      return { id, nome: '', telefone: '', endereco: '' };
+    }
   }
 }
