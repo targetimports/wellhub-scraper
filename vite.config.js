@@ -6,97 +6,27 @@ function apiPlugin() {
     name: 'api-proxy',
     configureServer(server) {
       const WELLHUB_TOKEN = 'Bearer 79b04a6d36f4efaac4e8fbfe54398e276a99ac0d9021550e50406be01c99c608';
-      const WELLHUB_BFF = 'https://mep-partner-bff.wellhub.com';
       const HEADERS = {
         'Authorization': WELLHUB_TOKEN,
         'Referer': 'https://wellhub.com/',
         'Origin': 'https://wellhub.com',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
+        'Accept': '*/*',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       };
 
-      // GET /api/search - buscar parceiros por lat/lon
-      server.middlewares.use('/api/search', async (req, res) => {
+      // Proxy generico - recebe qualquer URL e faz fetch server-side
+      server.middlewares.use('/api/proxy', async (req, res) => {
         try {
-          const url = new URL(req.url, 'http://localhost');
-          const params = new URLSearchParams({
-            lat: url.searchParams.get('lat') || '-23.5505',
-            lon: url.searchParams.get('lon') || '-46.6333',
-            locale: 'pt-br',
-            limit: url.searchParams.get('limit') || '20',
-            offset: url.searchParams.get('offset') || '0',
-          });
-          const term = url.searchParams.get('term');
-          if (term) params.set('term', term);
+          const reqUrl = new URL(req.url, 'http://localhost');
+          const targetUrl = reqUrl.searchParams.get('url');
+          if (!targetUrl) { res.statusCode = 400; res.end('{"error":"url required"}'); return; }
 
-          const response = await fetch(`${WELLHUB_BFF}/v2/search?${params}`, { headers: HEADERS });
-          const data = await response.text();
-          res.setHeader('Content-Type', 'application/json');
-          res.end(data);
-        } catch (e) {
-          res.statusCode = 500;
-          res.end(JSON.stringify({ error: e.message }));
-        }
-      });
-
-      // GET /api/location?term=xxx - buscar cidade pelo nome (retorna lat/lon)
-      server.middlewares.use('/api/location', async (req, res) => {
-        try {
-          const url = new URL(req.url, 'http://localhost');
-          const term = url.searchParams.get('term') || '';
-          const response = await fetch(
-            `${WELLHUB_BFF}/v2/search/location?maxResults=8&locale=pt-br&term=${encodeURIComponent(term)}`,
-            { headers: HEADERS }
-          );
-          const data = await response.text();
-          res.setHeader('Content-Type', 'application/json');
-          res.end(data);
-        } catch (e) {
-          res.statusCode = 500;
-          res.end(JSON.stringify({ error: e.message }));
-        }
-      });
-
-      // GET /api/details?id=UUID - entra na pagina e pega telefone + nome
-      server.middlewares.use('/api/details', async (req, res) => {
-        try {
-          const url = new URL(req.url, 'http://localhost');
-          const id = url.searchParams.get('id') || '';
-          if (!id) { res.statusCode = 400; res.end(JSON.stringify({ error: 'id obrigatorio' })); return; }
-
-          const pageUrl = `https://wellhub.com/pt-br/search/partners/${id}/`;
-          const response = await fetch(pageUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept': 'text/html,application/xhtml+xml',
-              'Accept-Language': 'pt-BR,pt;q=0.9',
-            },
-          });
-          const html = await response.text();
-
-          let telefone = '';
-          const telMatch = html.match(/href="tel:([^"]+)"/);
-          if (telMatch) {
-            telefone = telMatch[1].trim();
-          } else {
-            const phonePatterns = [/\(\d{2}\)\s*\d{4,5}[\s-]?\d{4}/, /\+55\s*\d{2}\s*\d{4,5}[\s-]?\d{4}/];
-            for (const pattern of phonePatterns) {
-              const m = html.match(pattern);
-              if (m) { telefone = m[0].trim(); break; }
-            }
-          }
-
-          let nome = '';
-          const ogTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
-          if (ogTitle) nome = ogTitle[1].trim();
-
-          let endereco = '';
-          const addrMatch = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/);
-          if (addrMatch) endereco = addrMatch[1].trim();
-
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ id, nome, telefone, endereco }));
+          const response = await fetch(targetUrl, { headers: HEADERS });
+          const body = await response.text();
+          const ct = response.headers.get('content-type') || 'text/plain';
+          res.setHeader('Content-Type', ct);
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(body);
         } catch (e) {
           res.statusCode = 500;
           res.end(JSON.stringify({ error: e.message }));
