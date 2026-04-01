@@ -1,16 +1,14 @@
 import express from 'express';
-import cors from 'cors';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json());
-
-// Token publico do Wellhub (embutido no frontend deles)
+// ── API Config ──
 const WELLHUB_TOKEN = 'Bearer 79b04a6d36f4efaac4e8fbfe54398e276a99ac0d9021550e50406be01c99c608';
 const WELLHUB_BFF = 'https://mep-partner-bff.wellhub.com';
-
 const HEADERS = {
   'Authorization': WELLHUB_TOKEN,
   'Referer': 'https://wellhub.com/',
@@ -20,55 +18,93 @@ const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
 };
 
-// Buscar localizacao por nome da cidade
-app.get('/api/location', async (req, res) => {
-  const { term } = req.query;
-  if (!term) return res.status(400).json({ error: 'Parametro "term" obrigatorio' });
+// ── API Routes ──
 
+// Buscar cidade pelo nome
+app.get('/api/location', async (req, res) => {
   try {
-    const url = `${WELLHUB_BFF}/v2/search/location?maxResults=6&locale=pt-br&term=${encodeURIComponent(term)}`;
-    const response = await fetch(url, { headers: HEADERS });
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    const term = req.query.term || '';
+    const response = await fetch(
+      `${WELLHUB_BFF}/v2/search/location?maxResults=8&locale=pt-br&term=${encodeURIComponent(term)}`,
+      { headers: HEADERS }
+    );
+    const data = await response.text();
+    res.setHeader('Content-Type', 'application/json');
+    res.send(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Buscar parceiros por coordenadas
+// Buscar parceiros por lat/lon
 app.get('/api/search', async (req, res) => {
-  const { lat, lon, limit = '20', offset = '0', term = '' } = req.query;
-  if (!lat || !lon) return res.status(400).json({ error: 'Parametros "lat" e "lon" obrigatorios' });
-
   try {
     const params = new URLSearchParams({
-      lat, lon, locale: 'pt-br',
-      limit: String(limit),
-      offset: String(offset),
+      lat: req.query.lat || '-23.5505',
+      lon: req.query.lon || '-46.6333',
+      locale: 'pt-br',
+      limit: req.query.limit || '20',
+      offset: req.query.offset || '0',
     });
-    if (term) params.set('term', term);
+    if (req.query.term) params.set('term', req.query.term);
 
-    const url = `${WELLHUB_BFF}/v2/search?${params}`;
-    const response = await fetch(url, { headers: HEADERS });
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    const response = await fetch(`${WELLHUB_BFF}/v2/search?${params}`, { headers: HEADERS });
+    const data = await response.text();
+    res.setHeader('Content-Type', 'application/json');
+    res.send(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Buscar atividades disponiveis
-app.get('/api/activities', async (_req, res) => {
+// Entrar na pagina do parceiro e pegar telefone + nome
+app.get('/api/details', async (req, res) => {
   try {
-    const url = `${WELLHUB_BFF}/v2/search/activities?allQuantity=100&popularQuantity=11&locale=pt-br&entityType=all`;
-    const response = await fetch(url, { headers: HEADERS });
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    const id = req.query.id || '';
+    if (!id) return res.status(400).json({ error: 'id obrigatorio' });
+
+    const pageUrl = `https://wellhub.com/pt-br/search/partners/${id}/`;
+    const response = await fetch(pageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+      },
+    });
+    const html = await response.text();
+
+    let telefone = '';
+    const telMatch = html.match(/href="tel:([^"]+)"/);
+    if (telMatch) {
+      telefone = telMatch[1].trim();
+    } else {
+      const phonePatterns = [/\(\d{2}\)\s*\d{4,5}[\s-]?\d{4}/, /\+55\s*\d{2}\s*\d{4,5}[\s-]?\d{4}/];
+      for (const pattern of phonePatterns) {
+        const m = html.match(pattern);
+        if (m) { telefone = m[0].trim(); break; }
+      }
+    }
+
+    let nome = '';
+    const ogTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
+    if (ogTitle) nome = ogTitle[1].trim();
+
+    let endereco = '';
+    const addrMatch = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/);
+    if (addrMatch) endereco = addrMatch[1].trim();
+
+    res.json({ id, nome, telefone, endereco });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
+});
+
+// ── Servir frontend (arquivos buildados) ──
+app.use(express.static(join(__dirname, 'dist')));
+app.get('*', (req, res) => {
+  res.sendFile(join(__dirname, 'dist', 'index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`  API proxy rodando em http://localhost:${PORT}`);
+  console.log(`Servidor rodando em http://localhost:${PORT}`);
 });
