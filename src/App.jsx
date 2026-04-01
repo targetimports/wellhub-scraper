@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { buscarCidades, buscarParceiros, buscarDetalhes } from './api';
 
 export default function App() {
   const [cidadeTexto, setCidadeTexto] = useState('');
@@ -21,21 +22,15 @@ export default function App() {
       setBuscandoCidade(true);
       try {
         const slug = cidadeTexto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-');
-        const res = await fetch(`/api/location?term=${encodeURIComponent(slug)}`);
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setSugestoes(data);
-          setShowSugestoes(true);
-        }
-      } catch { }
+        const data = await buscarCidades(slug);
+        if (Array.isArray(data)) { setSugestoes(data); setShowSugestoes(true); }
+      } catch {}
       setBuscandoCidade(false);
     }, 400);
   }, [cidadeTexto]);
 
   const selecionarSugestao = (loc) => {
-    setCidadeSelecionada(loc);
-    setCidadeTexto(loc.label);
-    setShowSugestoes(false);
+    setCidadeSelecionada(loc); setCidadeTexto(loc.label); setShowSugestoes(false);
   };
 
   const buscar = async () => {
@@ -43,19 +38,14 @@ export default function App() {
     setLoading(true); setResultados([]); setErro('');
     const controller = new AbortController();
     abortRef.current = controller;
-    const lat = cidadeSelecionada.location?.lat;
-    const lon = cidadeSelecionada.location?.lon;
+    const { lat, lon } = cidadeSelecionada.location;
 
     try {
       setProgresso('Buscando academias...');
       let allPartners = []; let offset = 0;
       while (offset < 500) {
         if (controller.signal.aborted) break;
-        const params = new URLSearchParams({ lat: String(lat), lon: String(lon), limit: '20', offset: String(offset) });
-        if (termo) params.set('term', termo);
-        const res = await fetch(`/api/search?${params}`, { signal: controller.signal });
-        if (!res.ok) throw new Error(`Erro ${res.status}`);
-        const data = await res.json();
+        const data = await buscarParceiros(lat, lon, 20, offset, termo, controller.signal);
         if (!Array.isArray(data) || data.length === 0) break;
         allPartners = [...allPartners, ...data];
         setProgresso(`${allPartners.length} academias encontradas...`);
@@ -63,7 +53,7 @@ export default function App() {
         if (data.length < 20) break;
       }
       if (controller.signal.aborted) return;
-      if (allPartners.length === 0) { setErro('Nenhuma academia encontrada nessa cidade'); setLoading(false); return; }
+      if (allPartners.length === 0) { setErro('Nenhuma academia encontrada'); setLoading(false); return; }
       setProgresso(`${allPartners.length} academias! Buscando telefones...`);
 
       const finalResults = [];
@@ -72,8 +62,7 @@ export default function App() {
         const p = allPartners[i];
         setProgresso(`Buscando telefone ${i + 1}/${allPartners.length}: ${p.name || '...'}`);
         try {
-          const detRes = await fetch(`/api/details?id=${p.id}`, { signal: controller.signal });
-          const det = await detRes.json();
+          const det = await buscarDetalhes(p.id, controller.signal);
           finalResults.push({ nome: det.nome || p.name || '', telefone: det.telefone || '', endereco: p.fullAddress || det.endereco || '', id: p.id });
         } catch {
           finalResults.push({ nome: p.name || '', telefone: '', endereco: p.fullAddress || '', id: p.id });
@@ -103,8 +92,7 @@ export default function App() {
   const dl = (content, name, type) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([content], { type }));
-    a.download = name.replace(/\s/g, '_');
-    a.click();
+    a.download = name.replace(/\s/g, '_'); a.click();
   };
 
   const comTel = resultados.filter(r => r.telefone);
@@ -121,8 +109,6 @@ export default function App() {
       <div style={{ maxWidth: 960, margin: '-16px auto 0', padding: '0 20px' }}>
         <div style={{ background: '#1e293b', borderRadius: 16, padding: 20, border: '1px solid #334155', boxShadow: '0 20px 40px rgba(0,0,0,0.4)' }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-
-            {/* CIDADE */}
             <div style={{ flex: '1 1 280px', position: 'relative' }}>
               <label style={labelStyle}>📍 Cidade</label>
               <input type="text" value={cidadeTexto}
@@ -133,13 +119,8 @@ export default function App() {
               />
               {buscandoCidade && <span style={{ position: 'absolute', right: 12, top: 32, color: '#fbbf24', fontSize: 12 }}>buscando...</span>}
               {cidadeSelecionada && <span style={{ position: 'absolute', right: 12, top: 32, color: '#34d399', fontSize: 14 }}>✓</span>}
-
               {showSugestoes && sugestoes.length > 0 && (
-                <div style={{
-                  position: 'absolute', zIndex: 99, top: '100%', left: 0, right: 0, marginTop: 4,
-                  background: '#1e293b', border: '1px solid #475569', borderRadius: 10,
-                  maxHeight: 250, overflowY: 'auto', boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
-                }}>
+                <div style={{ position: 'absolute', zIndex: 99, top: '100%', left: 0, right: 0, marginTop: 4, background: '#1e293b', border: '1px solid #475569', borderRadius: 10, maxHeight: 250, overflowY: 'auto', boxShadow: '0 10px 30px rgba(0,0,0,0.6)' }}>
                   {sugestoes.map((loc, i) => (
                     <button key={i} onClick={() => selecionarSugestao(loc)}
                       style={{ width: '100%', padding: '10px 16px', border: 'none', textAlign: 'left', background: 'transparent', color: '#cbd5e1', cursor: 'pointer', fontSize: 14, borderBottom: '1px solid #262f3d' }}
@@ -150,8 +131,6 @@ export default function App() {
                 </div>
               )}
             </div>
-
-            {/* TIPO */}
             <div style={{ flex: '1 1 200px' }}>
               <label style={labelStyle}>🔍 Tipo (opcional)</label>
               <input type="text" value={termo} onChange={e => setTermo(e.target.value)}
@@ -160,16 +139,12 @@ export default function App() {
                 style={{ ...inputStyle, boxSizing: 'border-box', width: '100%' }}
               />
             </div>
-
-            {/* BOTAO */}
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               {loading
                 ? <button onClick={parar} style={{ ...btnStyle, background: '#dc2626' }}>⏹ Parar</button>
-                : <button onClick={buscar} style={btnStyle}>🔍 Buscar</button>
-              }
+                : <button onClick={buscar} style={btnStyle}>🔍 Buscar</button>}
             </div>
           </div>
-
           {progresso && <p style={{ marginTop: 10, color: '#fbbf24', fontSize: 13 }}>⏳ {progresso}</p>}
           {erro && <p style={{ marginTop: 10, color: '#f87171', fontSize: 13 }}>❌ {erro}</p>}
         </div>
@@ -190,28 +165,20 @@ export default function App() {
             </div>
           </div>
         )}
-
         {resultados.length > 0 && (
           <div style={{ borderRadius: 12, border: '1px solid #334155', overflow: 'hidden', overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: '#1e293b' }}>
-                  <th style={th}>#</th>
-                  <th style={th}>Nome da Academia</th>
-                  <th style={th}>Telefone</th>
-                  <th style={th}>Endereço</th>
-                </tr>
-              </thead>
+              <thead><tr style={{ background: '#1e293b' }}>
+                <th style={th}>#</th><th style={th}>Nome da Academia</th><th style={th}>Telefone</th><th style={th}>Endereço</th>
+              </tr></thead>
               <tbody>
                 {resultados.map((r, i) => (
                   <tr key={r.id || i} style={{ borderBottom: '1px solid #1e293b', background: i % 2 === 0 ? '#0f172a' : '#111827' }}>
                     <td style={td}>{i + 1}</td>
                     <td style={{ ...td, color: '#fff', fontWeight: 600 }}>{r.nome || '-'}</td>
-                    <td style={td}>
-                      {r.telefone
-                        ? <a href={`tel:${r.telefone}`} style={{ color: '#34d399', textDecoration: 'none', fontWeight: 600 }}>📞 {r.telefone}</a>
-                        : <span style={{ color: '#475569' }}>—</span>}
-                    </td>
+                    <td style={td}>{r.telefone
+                      ? <a href={`tel:${r.telefone}`} style={{ color: '#34d399', textDecoration: 'none', fontWeight: 600 }}>📞 {r.telefone}</a>
+                      : <span style={{ color: '#475569' }}>—</span>}</td>
                     <td style={{ ...td, color: '#94a3b8', fontSize: 13 }}>{r.endereco || '-'}</td>
                   </tr>
                 ))}
@@ -219,7 +186,6 @@ export default function App() {
             </table>
           </div>
         )}
-
         {!loading && resultados.length === 0 && !erro && (
           <div style={{ textAlign: 'center', padding: '80px 20px' }}>
             <div style={{ fontSize: 64 }}>🏋️</div>
