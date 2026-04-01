@@ -6,7 +6,7 @@ const estados = listarEstados();
 export default function App() {
   const [modo, setModo] = useState('cidade'); // 'cidade' ou 'estado'
   const [cidade, setCidade] = useState('');
-  const [uf, setUf] = useState('BA');
+  const [uf, setUf] = useState('TODOS');
   const [termo, setTermo] = useState('');
   const [resultados, setResultados] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -18,9 +18,18 @@ export default function App() {
     let cidadesParaBuscar;
 
     if (modo === 'estado') {
-      const dados = resolverBusca(uf);
-      if (!dados) { setErro('Estado não encontrado'); return; }
-      cidadesParaBuscar = dados.cidades;
+      if (uf === 'TODOS') {
+        // Juntar todas as cidades de todos os estados
+        cidadesParaBuscar = [];
+        for (const e of estados) {
+          const dados = resolverBusca(e.uf);
+          if (dados) cidadesParaBuscar.push(...dados.cidades);
+        }
+      } else {
+        const dados = resolverBusca(uf);
+        if (!dados) { setErro('Estado não encontrado'); return; }
+        cidadesParaBuscar = dados.cidades;
+      }
     } else {
       if (!cidade.trim()) { setErro('Digite uma cidade'); return; }
       const dados = resolverBusca(cidade);
@@ -154,6 +163,7 @@ export default function App() {
                 <label style={labelStyle}>🗺️ Estado (busca todas as cidades)</label>
                 <select value={uf} onChange={e => setUf(e.target.value)}
                   style={{ ...inputStyle, cursor: 'pointer', appearance: 'auto' }}>
+                  <option value="TODOS">🇧🇷 TODO BRASIL - {estados.reduce((s, e) => s + e.totalCidades, 0)} cidades</option>
                   {estados.map(e => (
                     <option key={e.uf} value={e.uf}>{e.uf} - {e.totalCidades} cidades</option>
                   ))}
