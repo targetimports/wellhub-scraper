@@ -1,5 +1,4 @@
 import { useState, useRef } from 'react';
-import { Search, MapPin, Download, Loader2, Dumbbell, Clock, Star, Phone, ExternalLink, ChevronDown } from 'lucide-react';
 
 const CIDADES = [
   { nome: 'São Paulo', lat: -23.5505, lon: -46.6333 },
@@ -22,6 +21,14 @@ const CIDADES = [
   { nome: 'Niterói', lat: -22.8833, lon: -43.1036 },
   { nome: 'Joinville', lat: -26.3045, lon: -48.8487 },
   { nome: 'Uberlândia', lat: -18.9186, lon: -48.2772 },
+  { nome: 'Sorocaba', lat: -23.5015, lon: -47.4526 },
+  { nome: 'Maringá', lat: -23.4205, lon: -51.9333 },
+  { nome: 'Guarulhos', lat: -23.4538, lon: -46.5333 },
+  { nome: 'São Bernardo', lat: -23.6914, lon: -46.5646 },
+  { nome: 'Osasco', lat: -23.5325, lon: -46.7917 },
+  { nome: 'Juiz de Fora', lat: -21.7642, lon: -43.3503 },
+  { nome: 'Belém', lat: -1.4558, lon: -48.5024 },
+  { nome: 'Vitória', lat: -20.3155, lon: -40.3128 },
 ];
 
 export default function App() {
@@ -29,16 +36,16 @@ export default function App() {
   const [termo, setTermo] = useState('');
   const [resultados, setResultados] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [totalCarregado, setTotalCarregado] = useState(0);
   const [showCidades, setShowCidades] = useState(false);
   const [erro, setErro] = useState('');
+  const [progresso, setProgresso] = useState('');
   const abortRef = useRef(null);
 
   const buscar = async () => {
     setLoading(true);
     setResultados([]);
     setErro('');
-    setTotalCarregado(0);
+    setProgresso('Conectando ao Wellhub...');
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -47,9 +54,11 @@ export default function App() {
       let allResults = [];
       let offset = 0;
       const limit = 20;
+      let page = 1;
 
-      while (offset < 200) {
+      while (offset < 500) {
         if (controller.signal.aborted) break;
+        setProgresso(`Buscando página ${page}...`);
 
         const params = new URLSearchParams({
           lat: String(cidade.lat),
@@ -60,21 +69,24 @@ export default function App() {
         if (termo) params.set('term', termo);
 
         const res = await fetch(`/api/search?${params}`, { signal: controller.signal });
-        if (!res.ok) throw new Error(`Erro ${res.status}`);
+        if (!res.ok) throw new Error(`Erro ${res.status} na API`);
 
         const data = await res.json();
         if (!data || !Array.isArray(data) || data.length === 0) break;
 
         allResults = [...allResults, ...data];
         setResultados([...allResults]);
-        setTotalCarregado(allResults.length);
+        setProgresso(`${allResults.length} academias encontradas...`);
         offset += limit;
+        page++;
 
         if (data.length < limit) break;
       }
+
+      setProgresso('');
     } catch (err) {
       if (err.name !== 'AbortError') {
-        setErro(err.message);
+        setErro('Erro ao buscar: ' + err.message);
       }
     } finally {
       setLoading(false);
@@ -83,81 +95,130 @@ export default function App() {
 
   const parar = () => {
     if (abortRef.current) abortRef.current.abort();
+    setLoading(false);
+    setProgresso('');
+  };
+
+  const getActivities = (partner) => {
+    const acts = partner.activities || [];
+    return acts.map(a => typeof a === 'object' ? a.name : a).filter(Boolean);
+  };
+
+  const getHours = (partner) => {
+    const h = partner.openingHours;
+    if (!h) return '';
+    if (typeof h === 'string') return h;
+    return h.opens && h.closes ? `${h.opens} - ${h.closes}` : '';
+  };
+
+  const getDistance = (partner) => {
+    if (partner.distance == null) return '';
+    const d = Number(partner.distance);
+    return isNaN(d) ? String(partner.distance) : d < 1000 ? `${Math.round(d)} m` : `${(d / 1000).toFixed(1)} km`;
   };
 
   const exportarCSV = () => {
     if (!resultados.length) return;
-
-    const headers = ['Nome', 'Endereco', 'Atividades', 'Distancia (m)', 'Horario', 'Plano', 'Link'];
+    const headers = ['Nome', 'Endereco', 'Telefone', 'Atividades', 'Distancia', 'Horario', 'Plano Minimo', 'Preco', 'Avaliacao', 'Link'];
     const rows = resultados.map(r => [
       r.name || '',
-      (r.fullAddress || '').replace(/,/g, ' -'),
-      (r.activities || []).map(a => typeof a === 'object' ? a.name : a).join(' | '),
-      r.distance || '',
-      r.openingHours ? `${r.openingHours.opens}-${r.openingHours.closes}` : '',
+      (r.fullAddress || '').replace(/"/g, '""'),
+      r.phone || '',
+      getActivities(r).join(' | '),
+      getDistance(r),
+      getHours(r),
       r.lowestPlan?.name || '',
+      r.lowestPlan?.price ? `R$ ${r.lowestPlan.price}` : '',
+      r.rating || '',
       `https://wellhub.com/pt-br/search/partners/${r.id}/`,
     ]);
-
     const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `wellhub_${cidade.nome.replace(/\s/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadFile('\ufeff' + csv, `wellhub_${cidade.nome}_${Date.now()}.csv`, 'text/csv;charset=utf-8;');
   };
 
   const exportarJSON = () => {
     if (!resultados.length) return;
-    const blob = new Blob([JSON.stringify(resultados, null, 2)], { type: 'application/json' });
+    const data = resultados.map(r => ({
+      nome: r.name,
+      endereco: r.fullAddress,
+      telefone: r.phone || '',
+      atividades: getActivities(r),
+      horario: getHours(r),
+      distancia: getDistance(r),
+      plano: r.lowestPlan?.name || '',
+      preco: r.lowestPlan?.price ? `R$ ${r.lowestPlan.price}` : '',
+      avaliacao: r.rating || '',
+      lat: r.location?.lat,
+      lon: r.location?.lon,
+      imagem: r.imageUrl || '',
+      link: `https://wellhub.com/pt-br/search/partners/${r.id}/`,
+    }));
+    downloadFile(JSON.stringify(data, null, 2), `wellhub_${cidade.nome}_${Date.now()}.json`, 'application/json');
+  };
+
+  const downloadFile = (content, filename, type) => {
+    const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `wellhub_${cidade.nome.replace(/\s/g, '_')}_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename.replace(/\s/g, '_');
     a.click();
     URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="min-h-screen">
-      {/* Header */}
-      <header className="bg-gradient-to-r from-rose-600 to-pink-600 shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          <div className="flex items-center gap-3">
-            <Dumbbell className="w-8 h-8 text-white" />
-            <div>
-              <h1 className="text-2xl font-bold text-white">Wellhub Scraper</h1>
-              <p className="text-rose-100 text-sm">Busque academias e parceiros Wellhub em qualquer cidade</p>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div style={{ minHeight: '100vh', background: '#0f172a', color: '#e2e8f0', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
 
-      {/* Search Bar */}
-      <div className="max-w-7xl mx-auto px-4 -mt-6">
-        <div className="bg-slate-800 rounded-xl shadow-2xl p-6 border border-slate-700">
-          <div className="flex flex-col md:flex-row gap-3">
-            {/* Cidade */}
-            <div className="relative flex-1">
-              <MapPin className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
+      {/* ── HEADER ── */}
+      <div style={{ background: 'linear-gradient(135deg, #e11d48, #be185d)', padding: '24px 0' }}>
+        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 20px' }}>
+          <h1 style={{ fontSize: 28, fontWeight: 800, color: '#fff', margin: 0 }}>
+            🏋️ Wellhub Scraper
+          </h1>
+          <p style={{ color: '#fecdd3', margin: '4px 0 0', fontSize: 14 }}>
+            Busque academias em qualquer cidade do Brasil
+          </p>
+        </div>
+      </div>
+
+      {/* ── BARRA DE PESQUISA ── */}
+      <div style={{ maxWidth: 1200, margin: '-20px auto 0', padding: '0 20px' }}>
+        <div style={{
+          background: '#1e293b', borderRadius: 16, padding: 24,
+          border: '1px solid #334155', boxShadow: '0 25px 50px rgba(0,0,0,0.4)'
+        }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+
+            {/* Cidade dropdown */}
+            <div style={{ flex: '1 1 220px', position: 'relative' }}>
+              <label style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4, display: 'block' }}>📍 Cidade</label>
               <button
                 onClick={() => setShowCidades(!showCidades)}
-                className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600 rounded-lg text-left text-white hover:border-rose-500 transition-colors"
+                style={{
+                  width: '100%', padding: '12px 16px', background: '#0f172a', border: '1px solid #475569',
+                  borderRadius: 10, color: '#fff', textAlign: 'left', cursor: 'pointer', fontSize: 15
+                }}
               >
-                {cidade.nome}
+                {cidade.nome} ▾
               </button>
-              <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-slate-400" />
               {showCidades && (
-                <div className="absolute z-50 mt-1 w-full bg-slate-900 border border-slate-600 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                <div style={{
+                  position: 'absolute', zIndex: 99, top: '100%', left: 0, right: 0,
+                  background: '#1e293b', border: '1px solid #475569', borderRadius: 10,
+                  maxHeight: 300, overflowY: 'auto', marginTop: 4, boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+                }}>
                   {CIDADES.map(c => (
                     <button
                       key={c.nome}
                       onClick={() => { setCidade(c); setShowCidades(false); }}
-                      className={`w-full px-4 py-2 text-left hover:bg-slate-700 transition-colors ${
-                        c.nome === cidade.nome ? 'bg-rose-600/20 text-rose-400' : 'text-slate-300'
-                      }`}
+                      style={{
+                        width: '100%', padding: '10px 16px', border: 'none', textAlign: 'left',
+                        background: c.nome === cidade.nome ? '#e11d4820' : 'transparent',
+                        color: c.nome === cidade.nome ? '#fb7185' : '#cbd5e1',
+                        cursor: 'pointer', fontSize: 14
+                      }}
+                      onMouseEnter={e => e.target.style.background = '#334155'}
+                      onMouseLeave={e => e.target.style.background = c.nome === cidade.nome ? '#e11d4820' : 'transparent'}
                     >
                       {c.nome}
                     </button>
@@ -166,159 +227,196 @@ export default function App() {
               )}
             </div>
 
-            {/* Termo */}
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
+            {/* Termo de busca */}
+            <div style={{ flex: '2 1 300px' }}>
+              <label style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4, display: 'block' }}>🔍 Buscar</label>
               <input
                 type="text"
                 value={termo}
                 onChange={e => setTermo(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && buscar()}
-                placeholder="academia, crossfit, yoga, pilates..."
-                className="w-full pl-10 pr-4 py-3 bg-slate-900 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 outline-none transition-colors"
+                onKeyDown={e => e.key === 'Enter' && !loading && buscar()}
+                placeholder="academia, crossfit, yoga, pilates, natação..."
+                style={{
+                  width: '100%', padding: '12px 16px', background: '#0f172a', border: '1px solid #475569',
+                  borderRadius: 10, color: '#fff', fontSize: 15, outline: 'none', boxSizing: 'border-box'
+                }}
               />
             </div>
 
-            {/* Botao */}
-            {loading ? (
-              <button onClick={parar} className="px-8 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors">
-                <Loader2 className="w-5 h-5 animate-spin" /> Parar
-              </button>
-            ) : (
-              <button onClick={buscar} className="px-8 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors">
-                <Search className="w-5 h-5" /> Buscar
-              </button>
-            )}
+            {/* Botão */}
+            <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'flex-end' }}>
+              {loading ? (
+                <button onClick={parar} style={{
+                  padding: '12px 28px', background: '#dc2626', color: '#fff', border: 'none',
+                  borderRadius: 10, cursor: 'pointer', fontSize: 15, fontWeight: 600
+                }}>
+                  ⏹ Parar
+                </button>
+              ) : (
+                <button onClick={buscar} style={{
+                  padding: '12px 28px', background: '#e11d48', color: '#fff', border: 'none',
+                  borderRadius: 10, cursor: 'pointer', fontSize: 15, fontWeight: 600
+                }}>
+                  🔍 Buscar
+                </button>
+              )}
+            </div>
           </div>
 
-          {erro && (
-            <p className="mt-3 text-red-400 text-sm">{erro}</p>
-          )}
+          {/* Progresso / Erro */}
+          {progresso && <p style={{ marginTop: 12, color: '#fbbf24', fontSize: 14 }}>⏳ {progresso}</p>}
+          {erro && <p style={{ marginTop: 12, color: '#f87171', fontSize: 14 }}>❌ {erro}</p>}
         </div>
       </div>
 
-      {/* Results */}
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* Stats bar */}
+      {/* ── RESULTADOS ── */}
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '20px 20px 40px' }}>
+
+        {/* Stats + Downloads */}
         {resultados.length > 0 && (
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-slate-400">
-              <span className="text-white font-bold text-lg">{resultados.length}</span> parceiros encontrados em{' '}
-              <span className="text-rose-400">{cidade.nome}</span>
-              {loading && <span className="ml-2 text-yellow-400">(carregando...)</span>}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+            <p style={{ color: '#94a3b8', margin: 0 }}>
+              <span style={{ color: '#fff', fontWeight: 700, fontSize: 20 }}>{resultados.length}</span> academias em{' '}
+              <span style={{ color: '#fb7185' }}>{cidade.nome}</span>
             </p>
-            <div className="flex gap-2">
-              <button onClick={exportarCSV} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm flex items-center gap-2 transition-colors">
-                <Download className="w-4 h-4" /> CSV
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={exportarCSV} style={{
+                padding: '8px 20px', background: '#059669', color: '#fff', border: 'none',
+                borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600
+              }}>
+                📥 Baixar CSV
               </button>
-              <button onClick={exportarJSON} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm flex items-center gap-2 transition-colors">
-                <Download className="w-4 h-4" /> JSON
+              <button onClick={exportarJSON} style={{
+                padding: '8px 20px', background: '#2563eb', color: '#fff', border: 'none',
+                borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600
+              }}>
+                📥 Baixar JSON
               </button>
             </div>
           </div>
         )}
 
-        {/* Cards grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {resultados.map((r, i) => (
-            <PartnerCard key={r.id || i} partner={r} index={i} />
-          ))}
-        </div>
-
-        {/* Empty state */}
-        {!loading && resultados.length === 0 && (
-          <div className="text-center py-20">
-            <Dumbbell className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-            <h3 className="text-xl text-slate-400">Selecione uma cidade e clique em Buscar</h3>
-            <p className="text-slate-500 mt-2">Os resultados aparecem aqui com todos os detalhes</p>
+        {/* Tabela */}
+        {resultados.length > 0 && (
+          <div style={{ overflowX: 'auto', borderRadius: 12, border: '1px solid #334155' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+              <thead>
+                <tr style={{ background: '#1e293b' }}>
+                  <th style={thStyle}>#</th>
+                  <th style={thStyle}>Nome</th>
+                  <th style={thStyle}>Endereço</th>
+                  <th style={thStyle}>Telefone</th>
+                  <th style={thStyle}>Atividades</th>
+                  <th style={thStyle}>Dist.</th>
+                  <th style={thStyle}>Horário</th>
+                  <th style={thStyle}>Plano</th>
+                  <th style={thStyle}>⭐</th>
+                  <th style={thStyle}>Link</th>
+                </tr>
+              </thead>
+              <tbody>
+                {resultados.map((r, i) => (
+                  <tr key={r.id || i} style={{ borderBottom: '1px solid #1e293b', background: i % 2 === 0 ? '#0f172a' : '#111827' }}>
+                    <td style={tdStyle}>{i + 1}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600, color: '#fff', minWidth: 180 }}>{r.name}</td>
+                    <td style={{ ...tdStyle, color: '#94a3b8', minWidth: 200, fontSize: 13 }}>{r.fullAddress || '-'}</td>
+                    <td style={{ ...tdStyle, color: r.phone ? '#34d399' : '#475569', whiteSpace: 'nowrap' }}>
+                      {r.phone ? (
+                        <a href={`tel:${r.phone}`} style={{ color: '#34d399', textDecoration: 'none' }}>{r.phone}</a>
+                      ) : '-'}
+                    </td>
+                    <td style={{ ...tdStyle, maxWidth: 200 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                        {getActivities(r).slice(0, 3).map((a, j) => (
+                          <span key={j} style={{
+                            padding: '2px 8px', background: '#e11d4820', color: '#fb7185',
+                            borderRadius: 20, fontSize: 11, whiteSpace: 'nowrap'
+                          }}>{a}</span>
+                        ))}
+                        {getActivities(r).length > 3 && (
+                          <span style={{ padding: '2px 8px', background: '#334155', color: '#94a3b8', borderRadius: 20, fontSize: 11 }}>
+                            +{getActivities(r).length - 3}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: '#94a3b8' }}>{getDistance(r) || '-'}</td>
+                    <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: '#94a3b8' }}>{getHours(r) || '-'}</td>
+                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                      {r.lowestPlan ? (
+                        <span style={{ color: '#34d399' }}>
+                          {r.lowestPlan.name}
+                          {r.lowestPlan.price && <span style={{ color: '#64748b' }}> R${r.lowestPlan.price}</span>}
+                        </span>
+                      ) : '-'}
+                    </td>
+                    <td style={{ ...tdStyle, color: '#fbbf24', whiteSpace: 'nowrap' }}>{r.rating || '-'}</td>
+                    <td style={tdStyle}>
+                      <a
+                        href={`https://wellhub.com/pt-br/search/partners/${r.id}/`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#60a5fa', textDecoration: 'none', fontSize: 13 }}
+                      >
+                        Abrir ↗
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
 
-function PartnerCard({ partner, index }) {
-  const activities = (partner.activities || []).map(a => typeof a === 'object' ? a.name : a);
-  const hours = partner.openingHours;
-  const distance = partner.distance != null ? (Number(partner.distance) / 1000).toFixed(1) : null;
-  const link = `https://wellhub.com/pt-br/search/partners/${partner.id}/`;
-
-  return (
-    <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden hover:border-rose-500/50 transition-all hover:shadow-lg hover:shadow-rose-500/10">
-      {/* Image */}
-      {partner.imageUrl && (
-        <div className="h-40 overflow-hidden bg-slate-900">
-          <img src={partner.imageUrl} alt={partner.name} className="w-full h-full object-cover" loading="lazy" />
-        </div>
-      )}
-
-      <div className="p-4">
-        {/* Name + index */}
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="font-bold text-white text-lg leading-tight">{partner.name}</h3>
-          <span className="text-xs text-slate-500 bg-slate-900 px-2 py-1 rounded shrink-0">#{index + 1}</span>
-        </div>
-
-        {/* Address */}
-        {partner.fullAddress && (
-          <p className="text-slate-400 text-sm mt-2 flex items-start gap-1.5">
-            <MapPin className="w-3.5 h-3.5 mt-0.5 shrink-0 text-rose-400" />
-            {partner.fullAddress}
-          </p>
-        )}
-
-        {/* Meta row */}
-        <div className="flex flex-wrap gap-3 mt-3 text-sm">
-          {distance && (
-            <span className="text-slate-400 flex items-center gap-1">
-              <MapPin className="w-3.5 h-3.5" /> {distance} km
-            </span>
-          )}
-          {hours && (
-            <span className="text-slate-400 flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" /> {hours.opens} - {hours.closes}
-            </span>
-          )}
-          {partner.rating && (
-            <span className="text-yellow-400 flex items-center gap-1">
-              <Star className="w-3.5 h-3.5 fill-current" /> {partner.rating}
-            </span>
-          )}
-        </div>
-
-        {/* Activities tags */}
-        {activities.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-3">
-            {activities.slice(0, 5).map((a, i) => (
-              <span key={i} className="px-2 py-0.5 bg-rose-600/20 text-rose-300 rounded-full text-xs">
-                {a}
-              </span>
+        {/* Cards em grid para mobile */}
+        {resultados.length > 0 && (
+          <div className="mobile-cards" style={{ display: 'none' }}>
+            {resultados.map((r, i) => (
+              <div key={r.id || i} style={{
+                background: '#1e293b', borderRadius: 12, padding: 16, marginBottom: 12,
+                border: '1px solid #334155'
+              }}>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  {r.imageUrl && (
+                    <img src={r.imageUrl} alt="" style={{ width: 80, height: 80, borderRadius: 8, objectFit: 'cover' }} />
+                  )}
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ margin: 0, fontSize: 16, color: '#fff' }}>{r.name}</h3>
+                    {r.fullAddress && <p style={{ margin: '4px 0', fontSize: 13, color: '#94a3b8' }}>📍 {r.fullAddress}</p>}
+                    {r.phone && <p style={{ margin: '4px 0', fontSize: 13, color: '#34d399' }}>📞 {r.phone}</p>}
+                  </div>
+                </div>
+              </div>
             ))}
-            {activities.length > 5 && (
-              <span className="px-2 py-0.5 bg-slate-700 text-slate-400 rounded-full text-xs">
-                +{activities.length - 5}
-              </span>
-            )}
           </div>
         )}
 
-        {/* Plan */}
-        {partner.lowestPlan && (
-          <p className="text-sm text-slate-400 mt-3">
-            Plano min: <span className="text-emerald-400 font-medium">{partner.lowestPlan.name}</span>
-            {partner.lowestPlan.price && (
-              <span className="text-slate-500"> (R$ {partner.lowestPlan.price})</span>
-            )}
-          </p>
+        {/* Estado vazio */}
+        {!loading && resultados.length === 0 && !erro && (
+          <div style={{ textAlign: 'center', padding: '80px 20px' }}>
+            <div style={{ fontSize: 64 }}>🏋️</div>
+            <h3 style={{ color: '#475569', fontSize: 20, marginTop: 16 }}>Selecione uma cidade e clique em Buscar</h3>
+            <p style={{ color: '#334155', marginTop: 8 }}>Resultados com nome, endereço, telefone e atividades</p>
+          </div>
         )}
-
-        {/* Link */}
-        <a href={link} target="_blank" rel="noopener noreferrer"
-          className="mt-3 flex items-center gap-1.5 text-sm text-rose-400 hover:text-rose-300 transition-colors">
-          <ExternalLink className="w-3.5 h-3.5" /> Ver no Wellhub
-        </a>
       </div>
     </div>
   );
 }
+
+const thStyle = {
+  padding: '12px 10px',
+  textAlign: 'left',
+  color: '#94a3b8',
+  fontWeight: 600,
+  fontSize: 12,
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  whiteSpace: 'nowrap',
+  borderBottom: '2px solid #334155',
+};
+
+const tdStyle = {
+  padding: '10px',
+  verticalAlign: 'top',
+};
