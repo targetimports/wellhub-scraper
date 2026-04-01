@@ -1,51 +1,30 @@
-import { useState, useRef, useEffect } from 'react';
-import { buscarCidades, buscarParceiros, buscarDetalhes } from './api';
+import { useState, useRef } from 'react';
+import { resolverCidade, buscarParceiros, buscarDetalhes } from './api';
 
 export default function App() {
-  const [cidadeTexto, setCidadeTexto] = useState('');
-  const [sugestoes, setSugestoes] = useState([]);
-  const [cidadeSelecionada, setCidadeSelecionada] = useState(null);
-  const [showSugestoes, setShowSugestoes] = useState(false);
-  const [buscandoCidade, setBuscandoCidade] = useState(false);
+  const [cidade, setCidade] = useState('');
   const [termo, setTermo] = useState('');
   const [resultados, setResultados] = useState([]);
   const [loading, setLoading] = useState(false);
   const [progresso, setProgresso] = useState('');
   const [erro, setErro] = useState('');
   const abortRef = useRef(null);
-  const debounceRef = useRef(null);
-
-  useEffect(() => {
-    if (cidadeTexto.length < 2) { setSugestoes([]); return; }
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      setBuscandoCidade(true);
-      try {
-        const slug = cidadeTexto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '-');
-        const data = await buscarCidades(slug);
-        if (Array.isArray(data)) { setSugestoes(data); setShowSugestoes(true); }
-      } catch {}
-      setBuscandoCidade(false);
-    }, 400);
-  }, [cidadeTexto]);
-
-  const selecionarSugestao = (loc) => {
-    setCidadeSelecionada(loc); setCidadeTexto(loc.label); setShowSugestoes(false);
-  };
 
   const buscar = async () => {
-    if (!cidadeSelecionada) { setErro('Digite e selecione uma cidade primeiro'); return; }
+    if (!cidade.trim()) { setErro('Digite uma cidade'); return; }
+    const coords = resolverCidade(cidade);
+    if (!coords) { setErro('Cidade não encontrada. Tente: São Paulo, Feira de Santana, Salvador...'); return; }
+
     setLoading(true); setResultados([]); setErro('');
     const controller = new AbortController();
     abortRef.current = controller;
-    const { lat, lon } = cidadeSelecionada.location;
 
     try {
       setProgresso('Buscando academias...');
       let allPartners = []; let offset = 0;
       while (offset < 500) {
         if (controller.signal.aborted) break;
-        const data = await buscarParceiros(lat, lon, 20, offset, termo, controller.signal);
+        const data = await buscarParceiros(coords.lat, coords.lon, 20, offset, termo, controller.signal);
         if (!Array.isArray(data) || data.length === 0) break;
         allPartners = [...allPartners, ...data];
         setProgresso(`${allPartners.length} academias encontradas...`);
@@ -54,13 +33,13 @@ export default function App() {
       }
       if (controller.signal.aborted) return;
       if (allPartners.length === 0) { setErro('Nenhuma academia encontrada'); setLoading(false); return; }
-      setProgresso(`${allPartners.length} academias! Buscando telefones...`);
 
+      setProgresso(`${allPartners.length} academias! Buscando telefones...`);
       const finalResults = [];
       for (let i = 0; i < allPartners.length; i++) {
         if (controller.signal.aborted) break;
         const p = allPartners[i];
-        setProgresso(`Buscando telefone ${i + 1}/${allPartners.length}: ${p.name || '...'}`);
+        setProgresso(`Telefone ${i + 1}/${allPartners.length}: ${p.name || '...'}`);
         try {
           const det = await buscarDetalhes(p.id, controller.signal);
           finalResults.push({ nome: det.nome || p.name || '', telefone: det.telefone || '', endereco: p.fullAddress || det.endereco || '', id: p.id });
@@ -81,17 +60,16 @@ export default function App() {
     if (!resultados.length) return;
     const rows = [['Nome', 'Telefone', 'Endereco']];
     resultados.forEach(r => rows.push([r.nome, r.telefone, r.endereco.replace(/"/g, '""')]));
-    dl('\ufeff' + rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n'), `academias_${cidadeTexto}.csv`, 'text/csv;charset=utf-8;');
+    dl('\ufeff' + rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n'), `academias_${cidade}.csv`, 'text/csv;charset=utf-8;');
   };
 
   const exportarJSON = () => {
     if (!resultados.length) return;
-    dl(JSON.stringify(resultados, null, 2), `academias_${cidadeTexto}.json`, 'application/json');
+    dl(JSON.stringify(resultados, null, 2), `academias_${cidade}.json`, 'application/json');
   };
 
   const dl = (content, name, type) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([content], { type }));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type }));
     a.download = name.replace(/\s/g, '_'); a.click();
   };
 
@@ -102,42 +80,26 @@ export default function App() {
       <div style={{ background: 'linear-gradient(135deg, #e11d48, #9333ea)', padding: '28px 0' }}>
         <div style={{ maxWidth: 960, margin: '0 auto', padding: '0 20px' }}>
           <h1 style={{ fontSize: 26, fontWeight: 800, color: '#fff', margin: 0 }}>🏋️ Wellhub Scraper</h1>
-          <p style={{ color: '#fecdd3', margin: '4px 0 0', fontSize: 14 }}>Busca nome e telefone de academias - qualquer cidade do Brasil</p>
+          <p style={{ color: '#fecdd3', margin: '4px 0 0', fontSize: 14 }}>Busca nome e telefone de academias</p>
         </div>
       </div>
 
       <div style={{ maxWidth: 960, margin: '-16px auto 0', padding: '0 20px' }}>
         <div style={{ background: '#1e293b', borderRadius: 16, padding: 20, border: '1px solid #334155', boxShadow: '0 20px 40px rgba(0,0,0,0.4)' }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 280px', position: 'relative' }}>
+            <div style={{ flex: '1 1 250px' }}>
               <label style={labelStyle}>📍 Cidade</label>
-              <input type="text" value={cidadeTexto}
-                onChange={e => { setCidadeTexto(e.target.value); setCidadeSelecionada(null); }}
-                onFocus={() => sugestoes.length > 0 && setShowSugestoes(true)}
-                placeholder="Digite a cidade... Ex: Feira de Santana"
-                style={{ ...inputStyle, boxSizing: 'border-box', width: '100%', borderColor: cidadeSelecionada ? '#34d399' : '#475569' }}
-              />
-              {buscandoCidade && <span style={{ position: 'absolute', right: 12, top: 32, color: '#fbbf24', fontSize: 12 }}>buscando...</span>}
-              {cidadeSelecionada && <span style={{ position: 'absolute', right: 12, top: 32, color: '#34d399', fontSize: 14 }}>✓</span>}
-              {showSugestoes && sugestoes.length > 0 && (
-                <div style={{ position: 'absolute', zIndex: 99, top: '100%', left: 0, right: 0, marginTop: 4, background: '#1e293b', border: '1px solid #475569', borderRadius: 10, maxHeight: 250, overflowY: 'auto', boxShadow: '0 10px 30px rgba(0,0,0,0.6)' }}>
-                  {sugestoes.map((loc, i) => (
-                    <button key={i} onClick={() => selecionarSugestao(loc)}
-                      style={{ width: '100%', padding: '10px 16px', border: 'none', textAlign: 'left', background: 'transparent', color: '#cbd5e1', cursor: 'pointer', fontSize: 14, borderBottom: '1px solid #262f3d' }}
-                      onMouseEnter={e => e.target.style.background = '#334155'}
-                      onMouseLeave={e => e.target.style.background = 'transparent'}
-                    >📍 {loc.label}</button>
-                  ))}
-                </div>
-              )}
+              <input type="text" value={cidade} onChange={e => setCidade(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !loading && buscar()}
+                placeholder="Ex: Feira de Santana, Salvador, São Paulo..."
+                style={{ ...inputStyle, boxSizing: 'border-box', width: '100%' }} />
             </div>
             <div style={{ flex: '1 1 200px' }}>
               <label style={labelStyle}>🔍 Tipo (opcional)</label>
               <input type="text" value={termo} onChange={e => setTermo(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !loading && buscar()}
-                placeholder="academia, crossfit, yoga, pilates..."
-                style={{ ...inputStyle, boxSizing: 'border-box', width: '100%' }}
-              />
+                placeholder="academia, crossfit, yoga..."
+                style={{ ...inputStyle, boxSizing: 'border-box', width: '100%' }} />
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               {loading
@@ -156,7 +118,7 @@ export default function App() {
             <div>
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 18 }}>{resultados.length}</span>
               <span style={{ color: '#94a3b8' }}> academias em </span>
-              <span style={{ color: '#fb7185' }}>{cidadeTexto}</span>
+              <span style={{ color: '#fb7185' }}>{cidade}</span>
               {comTel.length > 0 && <span style={{ color: '#34d399', marginLeft: 8 }}>({comTel.length} com telefone)</span>}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -165,11 +127,12 @@ export default function App() {
             </div>
           </div>
         )}
+
         {resultados.length > 0 && (
           <div style={{ borderRadius: 12, border: '1px solid #334155', overflow: 'hidden', overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: '#1e293b' }}>
-                <th style={th}>#</th><th style={th}>Nome da Academia</th><th style={th}>Telefone</th><th style={th}>Endereço</th>
+                <th style={th}>#</th><th style={th}>Nome</th><th style={th}>Telefone</th><th style={th}>Endereço</th>
               </tr></thead>
               <tbody>
                 {resultados.map((r, i) => (
@@ -186,11 +149,12 @@ export default function App() {
             </table>
           </div>
         )}
+
         {!loading && resultados.length === 0 && !erro && (
           <div style={{ textAlign: 'center', padding: '80px 20px' }}>
             <div style={{ fontSize: 64 }}>🏋️</div>
             <h3 style={{ color: '#475569', fontSize: 18, marginTop: 16 }}>Digite a cidade e clique Buscar</h3>
-            <p style={{ color: '#334155', marginTop: 8 }}>Funciona com qualquer cidade do Brasil</p>
+            <p style={{ color: '#334155', marginTop: 8 }}>+100 cidades disponíveis</p>
           </div>
         )}
       </div>
@@ -199,7 +163,7 @@ export default function App() {
 }
 
 const labelStyle = { fontSize: 11, color: '#94a3b8', marginBottom: 4, display: 'block', fontWeight: 600 };
-const inputStyle = { width: '100%', padding: '10px 14px', background: '#0f172a', border: '1px solid #475569', borderRadius: 8, color: '#fff', textAlign: 'left', fontSize: 14, outline: 'none' };
+const inputStyle = { width: '100%', padding: '10px 14px', background: '#0f172a', border: '1px solid #475569', borderRadius: 8, color: '#fff', fontSize: 14, outline: 'none' };
 const btnStyle = { padding: '10px 24px', background: '#e11d48', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap' };
 const dlBtnStyle = { padding: '6px 16px', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 };
 const th = { padding: '10px 12px', textAlign: 'left', color: '#94a3b8', fontWeight: 600, fontSize: 12, textTransform: 'uppercase', borderBottom: '2px solid #334155' };
